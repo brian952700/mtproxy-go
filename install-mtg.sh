@@ -12,6 +12,22 @@ port=${2:-3128}
 [[ "$domain" =~ ^[a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?$ && "$domain" == *.* ]] || die '请输入域名，不带 https:// 或路径。'
 [[ "$port" =~ ^[1-9][0-9]{0,4}$ ]] && (( port <= 65535 )) || die '端口必须为 1–65535。'
 
+[[ -r /etc/os-release ]] || die '无法识别系统版本。'
+. /etc/os-release
+[[ "${ID:-}" == debian && "${VERSION_ID:-}" =~ ^[0-9]+$ ]] && (( VERSION_ID >= 12 )) || die '需要 Debian 12 或更高版本。'
+
+for command in curl tar sha256sum awk install systemctl ss flock; do
+    if ! command -v "$command" >/dev/null; then
+        apt-get update
+        apt-get install -y --no-install-recommends ca-certificates curl tar coreutils mawk iproute2 util-linux
+        break
+    fi
+done
+if [[ ! -s /etc/ssl/certs/ca-certificates.crt ]]; then
+    apt-get update
+    apt-get install -y --no-install-recommends ca-certificates
+fi
+
 for command in curl tar sha256sum awk install systemctl ss flock; do
     command -v "$command" >/dev/null || die "缺少命令: $command"
 done
@@ -63,7 +79,13 @@ tar -xzf "$archive"
 secret=$(./mtg generate-secret --hex "$domain")
 [[ "$secret" =~ ^ee[0-9a-f]+$ ]] || die '生成密钥失败。'
 
-printf 'secret = "%s"\nbind-to = "[::]:%s"\nprefer-ip = "prefer-ipv6"\n' "$secret" "$port" > config.toml
+bind="[::]:$port"
+prefer_ip=prefer-ipv6
+if [[ ! -s /proc/net/if_inet6 ]]; then
+    bind="0.0.0.0:$port"
+    prefer_ip=prefer-ipv4
+fi
+printf 'secret = "%s"\nbind-to = "%s"\nprefer-ip = "%s"\n' "$secret" "$bind" "$prefer_ip" > config.toml
 cat > mtg.service <<'UNIT'
 [Unit]
 Description=mtg Telegram MTProto proxy
