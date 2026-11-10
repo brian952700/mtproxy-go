@@ -6,8 +6,8 @@ die() { printf '%s\n' "$*" >&2; exit 1; }
 
 [[ "$(uname -s)" == Linux && -d /run/systemd/system ]] || die '需要使用 systemd 的 Linux。'
 (( EUID == 0 )) || die '请用 sudo 运行。'
-(( $# >= 1 && $# <= 2 )) || die '用法: sudo bash install-mtg.sh <HTTPS域名> [端口]'
-domain=$1
+(( $# <= 2 )) || die '用法: sudo bash install-mtg.sh [HTTPS域名] [端口]'
+domain=${1:-www.apple.com}
 port=${2:-3128}
 [[ "$domain" =~ ^[a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?$ && "$domain" == *.* ]] || die '请输入域名，不带 https:// 或路径。'
 [[ "$port" =~ ^[1-9][0-9]{0,4}$ ]] && (( port <= 65535 )) || die '端口必须为 1–65535。'
