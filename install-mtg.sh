@@ -68,6 +68,14 @@ listeners=$(ss -H -ltn "sport = :$port")
 [[ -z "$listeners" ]] || die "TCP $port 已被占用。"
 
 printf '      Debian %s / %s · TCP %s · %s\n' "$VERSION_ID" "$arch" "$port" "$domain"
+if [[ "$(timedatectl show --property=NTPSynchronized --value 2>/dev/null || true)" != yes ]]; then
+    printf '%s      未确认系统时钟已同步。时间偏差可能导致 Telegram 握手失败。%s\n' "$yellow" "$reset"
+    printf '      先运行 timedatectl set-ntp true，然后用 timedatectl status 检查。\n'
+    if (( VERSION_ID >= 11 )); then
+        printf '      若提示 NTP not supported，可安装并启动时间同步服务：\n'
+        printf '        apt-get update && apt-get install -y systemd-timesyncd && systemctl enable --now systemd-timesyncd\n'
+    fi
+fi
 done_step
 
 stage 2 '下载并校验 mtg'
