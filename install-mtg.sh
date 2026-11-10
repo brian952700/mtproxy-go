@@ -2,11 +2,23 @@
 set -euo pipefail
 umask 077
 
-die() { printf '%s\n' "$*" >&2; exit 1; }
+cyan='' green='' yellow='' red='' reset=''
+if [[ -t 1 && ${TERM:-dumb} != dumb && ! ${NO_COLOR+x} ]]; then
+    cyan=$'\033[36m' green=$'\033[32m' yellow=$'\033[33m'
+    red=$'\033[31m' reset=$'\033[0m'
+fi
+
+stage() { printf '\n%s  [%s/4] %s%s\n' "$cyan" "$1" "$2" "$reset"; }
+done_step() { printf '%s      完成%s\n' "$green" "$reset"; }
+die() { printf '%s  失败：%s%s\n' "$red" "$*" "$reset" >&2; exit 1; }
+
+version=2.3.0
+printf '\n%s  MTProto 代理安装器 · mtg v%s%s\n' "$cyan" "$version" "$reset"
+stage 1 '检查系统与依赖'
 
 [[ "$(uname -s)" == Linux && -d /run/systemd/system ]] || die '需要使用 systemd 的 Linux。'
-(( EUID == 0 )) || die '请用 sudo 运行。'
-(( $# <= 2 )) || die '用法: sudo bash install-mtg.sh [HTTPS域名] [端口]'
+(( EUID == 0 )) || die '请以 root 用户运行。'
+(( $# <= 2 )) || die '用法: bash install-mtg.sh [HTTPS域名] [端口]'
 domain=${1:-www.apple.com}
 port=${2:-3128}
 [[ "$domain" =~ ^[a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?$ && "$domain" == *.* ]] || die '请输入域名，不带 https:// 或路径。'
@@ -52,7 +64,10 @@ done
 listeners=$(ss -H -ltn "sport = :$port")
 [[ -z "$listeners" ]] || die "TCP $port 已被占用。"
 
-version=2.3.0
+printf '      Debian %s / %s · TCP %s · %s\n' "$VERSION_ID" "$arch" "$port" "$domain"
+done_step
+
+stage 2 '下载并校验 mtg'
 archive="mtg-$version-linux-$arch.tar.gz"
 checksums="mtg-$version-checksums.txt"
 base="https://github.com/9seconds/mtg/releases/download/v$version"
@@ -60,7 +75,12 @@ tmp=$(mktemp -d)
 installed=0
 success=0
 cleanup() {
+    local status=$?
+    if (( status != 0 )); then
+        printf '%s  安装中止（退出码 %s）%s\n' "$red" "$status" "$reset" >&2
+    fi
     if (( installed && !success )); then
+        printf '%s  正在清理本次安装的服务和文件…%s\n' "$yellow" "$reset" >&2
         systemctl disable --now mtg.service >/dev/null 2>&1 || true
         rm -f -- "$binary" "$config" "$unit"
         systemctl daemon-reload || true
@@ -70,6 +90,7 @@ cleanup() {
 trap cleanup EXIT
 cd "$tmp"
 for file in "$archive" "$checksums"; do
+    printf '      下载 %s\n' "$file"
     curl --proto '=https' --proto-redir '=https' -fSL --retry 3 -o "$file" "$base/$file"
 done
 awk -v file="$archive" '$2 == file || $2 == "*" file { print; found=1 } END { exit !found }' "$checksums" > checksum
@@ -79,11 +100,15 @@ tar -xzf "$archive"
 secret=$(./mtg generate-secret --hex "$domain")
 [[ "$secret" =~ ^ee[0-9a-f]+$ ]] || die '生成密钥失败。'
 
+done_step
+
+stage 3 '写入配置和服务'
 bind="[::]:$port"
 prefer_ip=prefer-ipv6
 if [[ ! -s /proc/net/if_inet6 ]]; then
     bind="0.0.0.0:$port"
     prefer_ip=prefer-ipv4
+    printf '%s      IPv6 不可用，改用 IPv4 监听%s\n' "$yellow" "$reset"
 fi
 printf 'secret = "%s"\nbind-to = "%s"\nprefer-ip = "%s"\n' "$secret" "$bind" "$prefer_ip" > config.toml
 cat > mtg.service <<'UNIT'
@@ -112,6 +137,9 @@ install -m 0755 ./mtg "$binary"
 install -m 0600 config.toml "$config"
 install -m 0644 mtg.service "$unit"
 systemctl daemon-reload
+done_step
+
+stage 4 '启动服务并检查监听'
 systemctl enable --now mtg.service
 for attempt in {1..20}; do
     listeners=$(ss -H -ltnp "sport = :$port")
@@ -126,5 +154,9 @@ if (( !success )); then
     die 'mtg 未成功监听，正在回滚安装。'
 fi
 
-printf '\nmtg %s 已启动，监听 TCP %s。\n' "$version" "$port"
-printf '生成 Telegram 连接链接: sudo %s access %s\n' "$binary" "$config"
+done_step
+printf '\n%s  安装成功 · 已启用开机自启%s\n' "$green" "$reset"
+printf '  监听地址      %s\n' "$bind"
+printf '  TLS 域名     %s\n\n' "$domain"
+printf '  生成 Telegram 连接链接\n    %s access %s\n\n' "$binary" "$config"
+printf '  查看服务状态\n    systemctl status mtg --no-pager\n\n'
