@@ -28,10 +28,10 @@ port=${2:-3128}
 . /etc/os-release
 [[ "${ID:-}" == debian && "${VERSION_ID:-}" =~ ^[0-9]+$ ]] && (( VERSION_ID >= 10 )) || die '需要 Debian 10 或更高版本。'
 
-for command in curl tar sha256sum awk install systemctl ss flock useradd userdel getent; do
+for command in curl tar sha256sum awk find install systemctl ss flock useradd userdel getent; do
     if ! command -v "$command" >/dev/null; then
         apt-get update
-        apt-get install -y --no-install-recommends ca-certificates curl tar coreutils mawk iproute2 util-linux passwd
+        apt-get install -y --no-install-recommends ca-certificates curl tar coreutils findutils mawk iproute2 util-linux passwd
         break
     fi
 done
@@ -40,7 +40,7 @@ if [[ ! -s /etc/ssl/certs/ca-certificates.crt ]]; then
     apt-get install -y --no-install-recommends ca-certificates
 fi
 
-for command in curl tar sha256sum awk install systemctl ss flock useradd userdel getent; do
+for command in curl tar sha256sum awk find install systemctl ss flock useradd userdel getent; do
     command -v "$command" >/dev/null || die "缺少命令: $command"
 done
 
@@ -98,13 +98,16 @@ trap cleanup EXIT
 cd "$tmp"
 for file in "$archive" "$checksums"; do
     printf '      下载 %s\n' "$file"
-    curl --proto '=https' --proto-redir '=https' -fSL --retry 3 -o "$file" "$base/$file"
+    curl --proto '=https' --proto-redir '=https' -fsSL --retry 3 -o "$file" "$base/$file"
 done
 awk -v file="$archive" '$2 == file || $2 == "*" file { print; found=1 } END { exit !found }' "$checksums" > checksum
 sha256sum --check checksum
-tar -xzf "$archive"
-[[ -x ./mtg ]] || die '发行包内找不到 mtg 可执行文件。'
-secret=$(./mtg generate-secret --hex "$domain")
+mkdir extracted
+tar -xzf "$archive" -C extracted
+mapfile -t executables < <(find extracted -type f -name mtg -perm /111)
+(( ${#executables[@]} == 1 )) || die '发行包内应包含且仅包含一个 mtg 可执行文件。'
+mtg_executable=${executables[0]}
+secret=$("$mtg_executable" generate-secret --hex "$domain")
 [[ "$secret" =~ ^ee[0-9a-f]+$ ]] || die '生成密钥失败。'
 
 done_step
@@ -142,7 +145,7 @@ UNIT
 useradd --system --user-group --no-create-home --shell /usr/sbin/nologin mtg
 account_created=1
 installed=1
-install -m 0755 ./mtg "$binary"
+install -m 0755 "$mtg_executable" "$binary"
 install -o root -g mtg -m 0640 config.toml "$config"
 install -m 0644 mtg.service "$unit"
 systemctl daemon-reload
