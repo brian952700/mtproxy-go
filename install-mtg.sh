@@ -26,12 +26,12 @@ port=${2:-3128}
 
 [[ -r /etc/os-release ]] || die '无法识别系统版本。'
 . /etc/os-release
-[[ "${ID:-}" == debian && "${VERSION_ID:-}" =~ ^[0-9]+$ ]] && (( VERSION_ID >= 12 )) || die '需要 Debian 12 或更高版本。'
+[[ "${ID:-}" == debian && "${VERSION_ID:-}" =~ ^[0-9]+$ ]] && (( VERSION_ID >= 10 )) || die '需要 Debian 10 或更高版本。'
 
-for command in curl tar sha256sum awk install systemctl ss flock; do
+for command in curl tar sha256sum awk install systemctl ss flock useradd userdel getent; do
     if ! command -v "$command" >/dev/null; then
         apt-get update
-        apt-get install -y --no-install-recommends ca-certificates curl tar coreutils mawk iproute2 util-linux
+        apt-get install -y --no-install-recommends ca-certificates curl tar coreutils mawk iproute2 util-linux passwd
         break
     fi
 done
@@ -40,7 +40,7 @@ if [[ ! -s /etc/ssl/certs/ca-certificates.crt ]]; then
     apt-get install -y --no-install-recommends ca-certificates
 fi
 
-for command in curl tar sha256sum awk install systemctl ss flock; do
+for command in curl tar sha256sum awk install systemctl ss flock useradd userdel getent; do
     command -v "$command" >/dev/null || die "缺少命令: $command"
 done
 
@@ -61,6 +61,9 @@ fi
 for path in "$binary" "$config" "$unit"; do
     [[ ! -e "$path" && ! -L "$path" ]] || die "已有文件: $path"
 done
+if getent passwd mtg >/dev/null || getent group mtg >/dev/null; then
+    die 'mtg 用户或组已存在。'
+fi
 listeners=$(ss -H -ltn "sport = :$port")
 [[ -z "$listeners" ]] || die "TCP $port 已被占用。"
 
@@ -73,6 +76,7 @@ checksums="mtg-$version-checksums.txt"
 base="https://github.com/9seconds/mtg/releases/download/v$version"
 tmp=$(mktemp -d)
 installed=0
+account_created=0
 success=0
 cleanup() {
     local status=$?
@@ -84,6 +88,9 @@ cleanup() {
         systemctl disable --now mtg.service >/dev/null 2>&1 || true
         rm -f -- "$binary" "$config" "$unit"
         systemctl daemon-reload || true
+    fi
+    if (( account_created && !success )); then
+        userdel mtg || printf '  清理 mtg 服务账户失败。\n' >&2
     fi
     rm -rf -- "$tmp"
 }
@@ -118,9 +125,9 @@ Wants=network-online.target
 After=network-online.target
 
 [Service]
-DynamicUser=yes
-LoadCredential=mtg.toml:/etc/mtg.toml
-ExecStart=/usr/local/bin/mtg run %d/mtg.toml
+User=mtg
+Group=mtg
+ExecStart=/usr/local/bin/mtg run /etc/mtg.toml
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 NoNewPrivileges=yes
@@ -132,9 +139,11 @@ LimitNOFILE=65536
 WantedBy=multi-user.target
 UNIT
 
+useradd --system --user-group --no-create-home --shell /usr/sbin/nologin mtg
+account_created=1
 installed=1
 install -m 0755 ./mtg "$binary"
-install -m 0600 config.toml "$config"
+install -o root -g mtg -m 0640 config.toml "$config"
 install -m 0644 mtg.service "$unit"
 systemctl daemon-reload
 done_step
