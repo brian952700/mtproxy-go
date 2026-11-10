@@ -28,10 +28,10 @@ port=${2:-3128}
 . /etc/os-release
 [[ "${ID:-}" == debian && "${VERSION_ID:-}" =~ ^[0-9]+$ ]] && (( VERSION_ID >= 10 )) || die '需要 Debian 10 或更高版本。'
 
-for command in curl tar sha256sum awk find install systemctl ss flock useradd userdel getent; do
+for command in curl tar sha256sum awk find install jq systemctl ss flock useradd userdel getent; do
     if ! command -v "$command" >/dev/null; then
         apt-get update
-        apt-get install -y --no-install-recommends ca-certificates curl tar coreutils findutils mawk iproute2 util-linux passwd
+        apt-get install -y --no-install-recommends ca-certificates curl tar coreutils findutils mawk jq iproute2 util-linux passwd
         break
     fi
 done
@@ -40,7 +40,7 @@ if [[ ! -s /etc/ssl/certs/ca-certificates.crt ]]; then
     apt-get install -y --no-install-recommends ca-certificates
 fi
 
-for command in curl tar sha256sum awk find install systemctl ss flock useradd userdel getent; do
+for command in curl tar sha256sum awk find install jq systemctl ss flock useradd userdel getent; do
     command -v "$command" >/dev/null || die "缺少命令: $command"
 done
 
@@ -170,5 +170,15 @@ done_step
 printf '\n%s  安装成功 · 已启用开机自启%s\n' "$green" "$reset"
 printf '  监听地址      %s\n' "$bind"
 printf '  TLS 域名     %s\n\n' "$domain"
-printf '  生成 Telegram 连接链接\n    %s access %s\n\n' "$binary" "$config"
+printf '  Telegram 连接链接（含代理密钥，请私下分享）\n'
+if links=$("$binary" access "$config" | jq -r '
+    [ ["IPv4", .ipv4.tg_url], ["IPv6", .ipv6.tg_url] ][]
+    | select(.[1] | type == "string" and length > 0)
+    | "    \(.[0])  \(.[1])"
+') && [[ -n "$links" ]]; then
+    printf '%s\n\n' "$links"
+else
+    printf '%s    暂未检测到可用的公网连接链接%s\n' "$yellow" "$reset"
+    printf '    手动生成：%s access %s\n\n' "$binary" "$config"
+fi
 printf '  查看服务状态\n    systemctl status mtg --no-pager\n\n'
